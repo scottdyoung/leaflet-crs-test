@@ -1,17 +1,42 @@
-import { useEffect, useMemo, useState } from "react";
-import { MapContainer, Marker, Popup, WMSTileLayer } from "react-leaflet";
-import L from "leaflet";
-// If your bundler complains, install deps: npm i react-leaflet leaflet proj4 proj4leaflet
-// Types: npm i -D @types/leaflet
-// Vite tip: add the CSS import in your main entry: import 'leaflet/dist/leaflet.css'
+import { useEffect, useState } from "react";
+import {
+  MapContainer,
+  Marker,
+  Popup,
+  useMap,
+  WMSTileLayer,
+} from "react-leaflet";
+import L, { CRS } from "leaflet";
+import React from "react";
 
-// --- Config ---
-const WMS_BASE_URL = "/mundialis/services/service?";
-const WMS_LAYER = "TOPO-OSM-WMS"; // Also available: TOPO-WMS, OSM-Overlay-WMS
-const WMS_VERSION = "1.1.1"; // Use 1.1.1 to avoid axis order headaches
+import "leaflet/dist/leaflet.css";
+import "proj4leaflet";
+import proj4 from "proj4";
+
+// Define projections for GIBS WMTS
+proj4.defs("EPSG:4326", "+proj=longlat +datum=WGS84 +no_defs");
+
+proj4.defs(
+  "EPSG:3857",
+  "+proj=merc +lon_0=0 +k=1 +x_0=0 +y_0=0 +datum=WGS84 +units=m +no_defs"
+);
+
+const CRS_4326 = new L.Proj.CRS(
+  "EPSG:4326",
+  "+proj=longlat +datum=WGS84 +no_defs",
+  {
+    origin: [-180, 90], // lon/lat of top-left corner in degrees
+    resolutions: Array.from({ length: 7 }, (_, z) => 0.5625 / Math.pow(2, z)),
+    bounds: L.bounds(
+      [-180, -90], // minX, minY in degrees
+      [180, 90] // maxX, maxY in degrees
+    ),
+  }
+);
 
 // Marker location (lat, lon)
-const MARKER = { lat: 36, lon: -78 };
+const MARKER = { lat: 37.08, lon: -76.35 };
+// const MARKER = { lat: 0, lon: 0 };
 
 // Leaflet default icon fix (Vite/Cra often need this tweak)
 const DefaultIcon = L.icon({
@@ -26,90 +51,176 @@ L.Marker.prototype.options.icon = DefaultIcon;
 // Supported CRS in vanilla Leaflet (no proj4 needed). You can extend this list with Proj4Leaflet if desired.
 const SUPPORTED_EPSG: Record<string, L.CRS> = {
   "EPSG:3857": L.CRS.EPSG3857,
-  "EPSG:4326": L.CRS.EPSG4326,
+  "EPSG:4326": CRS_4326,
 };
 
-// Fetch and parse WMS GetCapabilities to extract available EPSG codes for the chosen layer.
-async function fetchWmsCRS(): Promise<string[]> {
-  const url = `${WMS_BASE_URL}SERVICE=WMS&REQUEST=GetCapabilities&VERSION=${WMS_VERSION}`;
-  const res = await fetch(url);
-  const text = await res.text();
-
-  // Parse XML
-  const parser = new DOMParser();
-  const xml = parser.parseFromString(text, "text/xml");
-  console.log(xml);
-  // Find the Layer entry that matches WMS_LAYER
-  const layers = Array.from(xml.getElementsByTagName("Layer"));
-  const target = layers.find((lyr) => {
-    const nameEl = lyr.getElementsByTagName("Name")[0];
-    return nameEl && nameEl.textContent === WMS_LAYER;
-  });
-
-  // Collect CRS/SRS tags
-  const crsTags = target
-    ? [
-        ...Array.from(target.getElementsByTagName("CRS")).map(
-          (n) => n.textContent || ""
-        ),
-        ...Array.from(target.getElementsByTagName("SRS")).map(
-          (n) => n.textContent || ""
-        ),
-      ]
-    : [];
-
-  // Fallback to root supported CRS if none found at layer level
-  const rootCRS = [
-    ...Array.from(xml.getElementsByTagName("CRS")).map(
-      (n) => n.textContent || ""
-    ),
-    ...Array.from(xml.getElementsByTagName("SRS")).map(
-      (n) => n.textContent || ""
-    ),
-  ];
-  const epsgList = (crsTags.length ? crsTags : rootCRS)
-    .filter((s) => s && /EPSG:\d+/.test(s))
-    .map((s) => s!.match(/EPSG:\d+/)![0])
-    .filter((v, i, a) => a.indexOf(v) === i);
-
-  console.log(rootCRS, epsgList);
-  return epsgList;
+function TabPanel({
+  children,
+  value,
+  index,
+}: {
+  children: React.ReactNode;
+  value: number;
+  index: number;
+}) {
+  return (
+    <div
+      role="tabpanel"
+      hidden={value !== index}
+      id={`tabpanel-${index}`}
+      aria-labelledby={`tab-${index}`}
+    >
+      {value === index && <div>{children}</div>}
+    </div>
+  );
 }
 
-export default function App() {
-  const [epsgOptions, setEpsgOptions] = useState<string[]>([]);
-  const [selectedEPSG, setSelectedEPSG] = useState<string>("EPSG:3857");
-  const [error, setError] = useState<string | null>(null);
+interface CustomMapProps {
+  crs: CRS;
+  selectedEPSG: string;
+}
 
+const Mundialis = ({
+  crs,
+  selectedEPSG,
+}: CustomMapProps): React.JSX.Element => {
+  return (
+    <div className="rounded-2xl overflow-hidden shadow border">
+      <MapContainer
+        key={selectedEPSG}
+        center={[MARKER.lat, MARKER.lon]}
+        zoom={6}
+        style={{ height: "70vh", width: "100%" }}
+        crs={crs}
+        worldCopyJump={true}
+      >
+        <WMSTileLayer
+          url="https://ows.mundialis.de/services/service?"
+          layers="TOPO-OSM-WMS"
+          format="image/png"
+          transparent={true}
+          version="1.1.1"
+          attribution="Mundialis WMS"
+        />
+        <Marker position={[MARKER.lat, MARKER.lon]}>
+          <Popup>
+            Marker at lat {MARKER.lat}, lon {MARKER.lon}
+            <br />
+            Current projection: {selectedEPSG}
+          </Popup>
+        </Marker>
+      </MapContainer>
+    </div>
+  );
+};
+
+const NasaLayer = ({ epsg }: { epsg: string }): React.JSX.Element => {
+  const map = useMap();
+  // const layerId = "BlueMarble_ShadedRelief";
+  // const time = "default";
+  // const tileMatrixSet =
+  //   epsg === "EPSG:4326" ? "500m" : "GoogleMapsCompatible_Level9";
+
+  // const baseUrl =
+  //   epsg === "EPSG:4326"
+  //     ? `nasa/epsg4326/best/${layerId}/default/${time}/${tileMatrixSet}/{z}/{y}/{x}.jpg`
+  //     : `nasa/epsg3857/best/${layerId}/default/${time}/${tileMatrixSet}/{z}/{y}/{x}.jpg`;
+
+  // return (
+  //   <TileLayer
+  //     url={baseUrl}
+  //     tileSize={512}
+  //     noWrap={true}
+  //     attribution="Imagery courtesy NASA Earth Observations"
+  //   />
+  // );
   useEffect(() => {
-    (async () => {
-      try {
-        const list = await fetchWmsCRS();
-        // Only keep ones we can render without Proj4 definitions (extend as needed)
-        const usable = list.filter((code) => SUPPORTED_EPSG[code]);
-        const finalList = usable.length ? usable : Object.keys(SUPPORTED_EPSG);
-        setEpsgOptions(finalList);
-        if (!usable.length) {
-          setError(
-            "Could not read CRS list from WMS (or none usable without Proj4). Falling back to common EPSG codes."
-          );
-        }
-      } catch (e) {
-        console.warn(e);
-        setEpsgOptions(Object.keys(SUPPORTED_EPSG));
-        setError(
-          "WMS GetCapabilities fetch failed (possibly CORS). Using fallback EPSG list."
-        );
-      }
-    })();
-  }, []);
+    const layerId = "BlueMarble_ShadedRelief";
+    const time = "default";
+    const tileMatrixSet =
+      epsg === "EPSG:4326" ? "500m" : "GoogleMapsCompatible_Level8";
+    const tileSize = epsg === "EPSG:4326" ? 512 : 256;
 
-  const crs: L.CRS = useMemo(() => {
-    return SUPPORTED_EPSG[selectedEPSG] || L.CRS.EPSG3857;
-  }, [selectedEPSG]);
+    const baseUrl =
+      epsg === "EPSG:4326"
+        ? `nasa/epsg4326/best/${layerId}/default/${time}/${tileMatrixSet}/{z}/{y}/{x}.jpg`
+        : `nasa/epsg3857/best/${layerId}/default/${time}/${tileMatrixSet}/{z}/{y}/{x}.jpg`;
 
-  // Force MapContainer to remount when CRS changes
-  const mapKey = selectedEPSG;
+    const wmtsLayer = L.tileLayer(baseUrl, {
+      tileSize,
+      noWrap: true,
+    });
+
+    wmtsLayer.addTo(map);
+
+    return () => {
+      map.removeLayer(wmtsLayer);
+    };
+  }, [map, epsg]);
+
+  return <></>;
+};
+
+const Nasa = ({ crs, selectedEPSG }: CustomMapProps): React.JSX.Element => {
+  return (
+    <MapContainer
+      key={selectedEPSG}
+      center={[MARKER.lat, MARKER.lon]}
+      zoom={2}
+      crs={crs}
+      style={{ height: "70vh", width: "100%" }}
+      worldCopyJump
+    >
+      <NasaLayer epsg={selectedEPSG} />
+      <Marker position={[MARKER.lat, MARKER.lon]}>
+        <Popup>
+          Marker at lat {MARKER.lat}, lon {MARKER.lon}
+          <br />
+          Current projection: {selectedEPSG}
+        </Popup>
+      </Marker>
+    </MapContainer>
+  );
+};
+
+const Bifrost = ({ crs, selectedEPSG }: CustomMapProps): React.JSX.Element => {
+  return (
+    <div className="rounded-2xl overflow-hidden shadow border">
+      <MapContainer
+        key={selectedEPSG}
+        center={[MARKER.lat, MARKER.lon]}
+        zoom={6}
+        style={{ height: "70vh", width: "100%" }}
+        crs={crs}
+        worldCopyJump={true}
+      >
+        <WMSTileLayer
+          transparent="TRUE"
+          url="/bifrost/ogc/AFW_WMS?"
+          layers="LAND"
+          format="image/png"
+          version="1.3.0"
+          uppercase
+        />
+        <Marker position={[MARKER.lat, MARKER.lon]}>
+          <Popup>
+            Marker at lat {MARKER.lat}, lon {MARKER.lon}
+            <br />
+            Current projection: {selectedEPSG}
+          </Popup>
+        </Marker>
+      </MapContainer>
+    </div>
+  );
+};
+export default function App() {
+  const [selectedEPSG, setSelectedEPSG] = useState<string>("EPSG:3857");
+  const [tabIndex, setTabIndex] = useState(1);
+
+  const crs =
+    selectedEPSG === "EPSG:4326"
+      ? SUPPORTED_EPSG["EPSG:4326"]
+      : SUPPORTED_EPSG["EPSG:3857"];
 
   return (
     <div className="min-h-screen bg-gray-50 p-4">
@@ -121,45 +232,44 @@ export default function App() {
             value={selectedEPSG}
             onChange={(e) => setSelectedEPSG(e.target.value)}
           >
-            {epsgOptions.map((code) => (
+            {Object.keys(SUPPORTED_EPSG).map((code) => (
               <option key={code} value={code}>
                 {code}
               </option>
             ))}
           </select>
-          {error && (
-            <span className="text-xs text-amber-700 bg-amber-100 px-2 py-1 rounded">
-              {error}
-            </span>
-          )}
         </div>
 
-        <div className="rounded-2xl overflow-hidden shadow border">
-          <MapContainer
-            key={mapKey}
-            center={[MARKER.lat, MARKER.lon]}
-            zoom={6}
-            style={{ height: "70vh", width: "100%" }}
-            crs={crs}
-            worldCopyJump={true}
+        <div className="tabs">
+          <button
+            className={`tab ${tabIndex === 0 ? "active" : ""}`}
+            onClick={() => setTabIndex(0)}
           >
-            <WMSTileLayer
-              url="https://ows.mundialis.de/services/service?"
-              layers="TOPO-OSM-WMS"
-              format="image/png"
-              transparent={true}
-              version="1.1.1"
-              attribution="Mundialis WMS"
-            />
-            <Marker position={[MARKER.lat, MARKER.lon]}>
-              <Popup>
-                Marker at lat {MARKER.lat}, lon {MARKER.lon}
-                <br />
-                Current projection: {selectedEPSG}
-              </Popup>
-            </Marker>
-          </MapContainer>
+            Mundialis
+          </button>
+          <button
+            className={`tab ${tabIndex === 1 ? "active" : ""}`}
+            onClick={() => setTabIndex(1)}
+          >
+            Kartverket
+          </button>
+          <button
+            className={`tab ${tabIndex === 2 ? "active" : ""}`}
+            onClick={() => setTabIndex(2)}
+          >
+            BiFROST
+          </button>
         </div>
+
+        <TabPanel value={tabIndex} index={0}>
+          <Mundialis crs={crs} selectedEPSG={selectedEPSG} />
+        </TabPanel>
+        <TabPanel value={tabIndex} index={1}>
+          <Nasa crs={crs} selectedEPSG={selectedEPSG} />
+        </TabPanel>
+        <TabPanel value={tabIndex} index={2}>
+          <Bifrost crs={crs} selectedEPSG={selectedEPSG} />
+        </TabPanel>
       </div>
     </div>
   );
